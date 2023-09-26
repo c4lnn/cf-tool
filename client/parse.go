@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"html"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,22 +18,29 @@ import (
 )
 
 func findSample(body []byte) (input [][]byte, output [][]byte, err error) {
-	irg := regexp.MustCompile(`class="input"[\s\S]*?<pre>([\s\S]*?)</pre>`)
-	org := regexp.MustCompile(`class="output"[\s\S]*?<pre>([\s\S]*?)</pre>`)
+	irg := regexp.MustCompile(`class="input"([\s\S]*?)<pre([\s\S]*?)>([\s\S]*?)</pre>`)
+	org := regexp.MustCompile(`class="output"([\s\S]*?)<pre([\s\S]*?)>([\s\S]*?)</pre>`)
 	a := irg.FindAllSubmatch(body, -1)
 	b := org.FindAllSubmatch(body, -1)
 	if a == nil || b == nil || len(a) != len(b) {
 		return nil, nil, fmt.Errorf("Cannot parse sample with input %v and output %v", len(a), len(b))
 	}
-	newline := regexp.MustCompile(`<[\s/br]+?>`)
+	irg = regexp.MustCompile(`class="test-example-line([\s\S]*?)>([\s\S]*?)</div>`)
 	filter := func(src []byte) []byte {
-		src = newline.ReplaceAll(src, []byte("\n"))
 		s := html.UnescapeString(string(src))
 		return []byte(strings.TrimSpace(s) + "\n")
 	}
 	for i := 0; i < len(a); i++ {
-		input = append(input, filter(a[i][1]))
-		output = append(output, filter(b[i][1]))
+		line := irg.FindAllSubmatch(a[i][3], -1)
+		var temp []byte
+		for j := 0; j < len(line); j++ {
+			temp = append(temp, filter(line[j][2])...)
+		}
+		if line == nil {
+			temp = append(temp, filter(a[i][3])...)
+		}
+		input = append(input, temp)
+		output = append(output, filter(b[i][3]))
 	}
 	return
 }
@@ -57,14 +63,14 @@ func (c *Client) ParseProblem(URL, path string, mu *sync.Mutex) (samples int, st
 	}
 
 	standardIO = true
-	if !bytes.Contains(body, []byte(`<div class="input-file"><div class="property-title">input</div>standard input</div><div class="output-file"><div class="property-title">output</div>standard output</div>`)) {
+	if !bytes.Contains(body, []byte(`<div class="sample-test"`)) {
 		standardIO = false
 	}
 
 	for i := 0; i < len(input); i++ {
 		fileIn := filepath.Join(path, fmt.Sprintf("in%v.txt", i+1))
 		fileOut := filepath.Join(path, fmt.Sprintf("ans%v.txt", i+1))
-		e := ioutil.WriteFile(fileIn, input[i], 0644)
+		e := os.WriteFile(fileIn, input[i], 0644)
 		if e != nil {
 			if mu != nil {
 				mu.Lock()
@@ -74,7 +80,7 @@ func (c *Client) ParseProblem(URL, path string, mu *sync.Mutex) (samples int, st
 				mu.Unlock()
 			}
 		}
-		e = ioutil.WriteFile(fileOut, output[i], 0644)
+		e = os.WriteFile(fileOut, output[i], 0644)
 		if e != nil {
 			if mu != nil {
 				mu.Lock()
